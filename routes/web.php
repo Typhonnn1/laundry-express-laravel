@@ -1,55 +1,46 @@
 <?php
 
-use App\Http\Controllers\Admin\DashboardController;
-use App\Http\Controllers\Admin\OrderAdminController;
-use App\Http\Controllers\Admin\ServiceController;
-use App\Http\Controllers\AuthController;
-use App\Http\Controllers\OrderController;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Auth;
+use App\Http\Controllers\AuthController;
+use App\Http\Controllers\PackageController;
+use App\Http\Controllers\OrderController;
 
 /*
 |--------------------------------------------------------------------------
-| Web Routes - Customer Portal (Milestone 2)
+| Web Routes - Sistem Laundry Serkom BNSP
 |--------------------------------------------------------------------------
 */
 
-// Customer Homepage (Catalog, Order Form & Tracking Search)
-Route::get('/', [OrderController::class, 'index'])->name('home');
+// 1. Landing Page -> Halaman utama sistem laundry otomatis mengalihkan pengunjung yang belum login ke formulir login via redirect('login')
+Route::get('/', function () {
+    if (Auth::check()) {
+        return Auth::user()->role === 'admin'
+            ? redirect()->route('admin.packages.index')
+            : redirect()->route('customer.catalog');
+    }
+    return redirect('login');
+});
 
-// Customer Order Submission (Database Transaction & Recalculation)
-Route::post('/pesan', [OrderController::class, 'store'])->name('order.store');
-
-// Customer Receipt View (Nota Breakdown, Print Action, WhatsApp Dispatch)
-Route::get('/nota/{order}', [OrderController::class, 'show'])->name('order.show')->whereNumber('order');
-
-/*
-|--------------------------------------------------------------------------
-| Admin Authentication Routes (Milestone 3 - Part 1)
-|--------------------------------------------------------------------------
-*/
-
+// 2. Rute Autentikasi Publik (Guest)
 Route::get('/login', [AuthController::class, 'showLogin'])->name('login');
-Route::post('/login', [AuthController::class, 'login']);
+Route::post('/login', [AuthController::class, 'login'])->name('login.post');
+Route::get('/register', [AuthController::class, 'showRegister'])->name('register');
+Route::post('/register', [AuthController::class, 'register'])->name('register.post');
 Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
 
-/*
-|--------------------------------------------------------------------------
-| Admin Portal Protected Routes (Milestone 3 - Parts 2 & 3)
-|--------------------------------------------------------------------------
-*/
+// 3. Rute Terproteksi (Wajib Login via Middleware Bawaan 'auth')
+Route::middleware(['auth'])->group(function () {
+    // --- Sisi Pelanggan (Customer) ---
+    Route::get('/catalog', [OrderController::class, 'catalog'])->name('customer.catalog');
+    Route::get('/order/create/{package_id}', [OrderController::class, 'createOrder'])->name('customer.order.create');
+    Route::post('/order/store', [OrderController::class, 'storeOrder'])->name('customer.order.store');
 
-Route::middleware('auth')->prefix('admin')->name('admin.')->group(function () {
-    // Admin Dashboard (Overview Metrics & Recent Orders)
-    Route::get('/', [DashboardController::class, 'index'])->name('dashboard');
+    // --- Sisi Administrator (Admin) ---
+    // Master Paket Laundry (Resource CRUD 7 Rute Standar)
+    Route::resource('/admin/packages', PackageController::class)->names('admin.packages');
 
-    // Service Package Management (CRUD)
-    Route::get('/layanan', [ServiceController::class, 'index'])->name('services.index');
-    Route::post('/layanan', [ServiceController::class, 'store'])->name('services.store');
-    Route::match(['put', 'patch'], '/layanan/{service}', [ServiceController::class, 'update'])->name('services.update');
-    Route::delete('/layanan/{service}', [ServiceController::class, 'destroy'])->name('services.destroy');
-
-    // Order Workflow & Status Management
-    Route::get('/pesanan', [OrderAdminController::class, 'index'])->name('orders.index');
-    Route::patch('/pesanan/{order}/status', [OrderAdminController::class, 'updateStatus'])->name('orders.update-status');
-    Route::delete('/pesanan/{order}', [OrderAdminController::class, 'destroy'])->name('orders.destroy');
+    // Rekapitulasi Pesanan & Update Status Transaksi
+    Route::get('/admin/orders', [OrderController::class, 'adminOrders'])->name('admin.orders.index');
+    Route::patch('/admin/orders/{id}/status', [OrderController::class, 'updateStatus'])->name('admin.orders.updateStatus');
 });

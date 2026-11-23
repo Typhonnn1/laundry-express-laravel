@@ -2,137 +2,94 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\LaundryPackage;
 use App\Models\Order;
-use App\Models\OrderDetail;
-use App\Models\Service;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\View\View;
+use Illuminate\Support\Facades\Auth;
 
 class OrderController extends Controller
 {
     /**
-     * Display the customer portal homepage with service catalog, order form, and order tracking search.
+     * 1. Tampilkan katalog paket laundry untuk Customer.
      */
-    public function index(Request $request): View
+    public function catalog()
     {
-        $services = Service::all();
-        $search = $request->query('search');
-        $trackedOrders = null;
-        $searchPerformed = false;
-
-        if ($request->filled('search')) {
-            $searchTerm = trim((string) $search);
-            $searchPerformed = true;
-
-            $trackedOrders = Order::with('orderDetails.service')
-                ->where(function ($query) use ($searchTerm) {
-                    $query->where('whatsapp_number', $searchTerm)
-                        ->orWhere('id', $searchTerm);
-
-                    // Also support formatted ID like #1 or #LE-00001
-                    $cleanId = preg_replace('/[^0-9]/', '', $searchTerm);
-                    if (! empty($cleanId) && ctype_digit($cleanId)) {
-                        $query->orWhere('id', (int) $cleanId);
-                    }
-                })
-                ->latest()
-                ->get();
-        }
-
-        return view('orders.index', compact('services', 'trackedOrders', 'search', 'searchPerformed'));
+        $packages = LaundryPackage::all();
+        return view('customer.catalog', compact('packages'));
     }
 
     /**
-     * Store a newly created order and order details in a database transaction with server-side price recalculation.
+     * 2. Tampilkan formulir pemesanan untuk paket yang dipilih.
      */
-    public function store(Request $request): RedirectResponse
+    public function createOrder($package_id)
     {
-        $validated = $request->validate([
-            'customer_name' => [
-                'required',
-                'string',
-                'max:100',
-                'regex:/[^\s]/',
-            ],
-            'whatsapp_number' => [
-                'required',
-                'string',
-                'min:8',
-                'max:20',
-                'regex:/^(\+?62|0)[0-9]{8,18}$/',
-            ],
-            'items' => [
-                'required',
-                'array',
-                'min:1',
-            ],
-            'items.*.service_id' => [
-                'required',
-                'integer',
-                'exists:services,id',
-            ],
-            'items.*.qty_or_weight' => [
-                'required',
-                'integer',
-                'min:1',
-                'max:100000',
-            ],
-        ], [
-            'customer_name.required' => 'Nama pelanggan wajib diisi.',
-            'customer_name.max' => 'Nama pelanggan maksimal 100 karakter.',
-            'customer_name.regex' => 'Nama pelanggan tidak boleh hanya berisi spasi.',
-            'whatsapp_number.required' => 'Nomor WhatsApp wajib diisi.',
-            'whatsapp_number.regex' => 'Format nomor WhatsApp tidak valid. Gunakan format 08... atau 62...',
-            'items.required' => 'Minimal pilih satu layanan laundry.',
-            'items.min' => 'Minimal pilih satu layanan laundry.',
-            'items.*.service_id.required' => 'Layanan harus dipilih.',
-            'items.*.service_id.exists' => 'Layanan yang dipilih tidak terdaftar.',
-            'items.*.qty_or_weight.required' => 'Jumlah atau berat wajib diisi.',
-            'items.*.qty_or_weight.integer' => 'Jumlah atau berat harus berupa angka bulat.',
-            'items.*.qty_or_weight.min' => 'Jumlah atau berat minimal 1.',
+        $package = LaundryPackage::findOrFail($package_id);
+        return view('customer.order_form', compact('package'));
+    }
+
+    /**
+     * 3. Simpan transaksi pesanan laundry pelanggan.
+     */
+    public function storeOrder(Request $request)
+    {
+        $request->validate([
+            'package_id'    => 'required|exists:laundry_packages,id',
+            'customer_name' => 'required|string|max:255',
+            'weight'        => 'required|numeric|min:0.5',
         ]);
 
-        $order = DB::transaction(function () use ($validated) {
-            $createdOrder = Order::create([
-                'customer_name' => trim($validated['customer_name']),
-                'whatsapp_number' => trim($validated['whatsapp_number']),
-                'total_price' => 0,
-                'status' => Order::STATUS_ANTREAN,
-            ]);
+        $package = LaundryPackage::findOrFail($request->package_id);
 
-            $calculatedGrandTotal = 0;
+        // Kalkulasi total harga di backend server-side (aman dari manipulasi form pengguna)
+        $total_price = (int) round($package->price_per_kg * $request->weight);
 
-            foreach ($validated['items'] as $item) {
-                $service = Service::lockForUpdate()->findOrFail($item['service_id']);
-                $qty = (int) $item['qty_or_weight'];
-                $itemSubtotal = $service->price_per_unit * $qty;
-                $calculatedGrandTotal += $itemSubtotal;
+        $order = Order::create([
+            'user_id'       => Auth::id(),
+            'package_id'    => $package->id,
+            'customer_name' => $request->customer_name,
+            'weight'        => $request->weight,
+            'total_price'   => $total_price,
+            'status'        => 'Baru',
+            'order_date'    => now()->toDateString(),
+        ]);
 
-                OrderDetail::create([
-                    'order_id' => $createdOrder->id,
-                    'service_id' => $service->id,
-                    'qty_or_weight' => $qty,
-                    'subtotal' => $itemSubtotal,
-                ]);
-            }
-
-            $createdOrder->update(['total_price' => $calculatedGrandTotal]);
-
-            return $createdOrder;
-        });
-
-        return redirect('/nota/'.$order->id)->with('success', 'Pesanan laundry berhasil dibuat!');
+        return redirect()->route('customer.catalog')
+            ->with('success', "Pesanan Laundry berhasil dibuat dengan No. Nota #{$order->id}! Total Biaya: Rp " . number_format($total_price, 0, ',', '.'));
     }
 
     /**
-     * Display the specified order receipt (nota).
+     * 4. Rekapitulasi pesanan masuk tanpa filter (Sisi Administrator).
      */
-    public function show(Order $order): View
+    public function adminOrders()
     {
-        $order->load(['orderDetails.service']);
+        if (Auth::user()->role !== 'admin') {
+            abort(403, 'Akses Ditolak: Hanya Administrator yang dapat melihat rekapan pesanan!');
+        }
 
-        return view('orders.nota', compact('order'));
+        // Unfiltered recap table dengan eager loading untuk performa optimal
+        $orders = Order::with('package', 'user')->latest()->get();
+        $totalRevenue = $orders->sum('total_price');
+        $totalWeight = $orders->sum('weight');
+
+        return view('admin.orders.index', compact('orders', 'totalRevenue', 'totalWeight'));
+    }
+
+    /**
+     * 5. Ubah status progres pesanan laundry (Sisi Administrator).
+     */
+    public function updateStatus(Request $request, $id)
+    {
+        if (Auth::user()->role !== 'admin') {
+            abort(403);
+        }
+
+        $request->validate([
+            'status' => 'required|in:Baru,Diproses,Selesai,Diambil',
+        ]);
+
+        $order = Order::findOrFail($id);
+        $order->update(['status' => $request->status]);
+
+        return back()->with('success', "Status pesanan #{$order->id} berhasil diubah menjadi {$order->status}!");
     }
 }

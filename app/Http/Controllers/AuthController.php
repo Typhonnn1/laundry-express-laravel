@@ -2,63 +2,107 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\RedirectResponse;
+use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\View\View;
+use Illuminate\Support\Facades\Hash;
 
 class AuthController extends Controller
 {
     /**
-     * Show the admin login form.
+     * Tampilkan halaman formulir login.
      */
-    public function showLogin(): View|RedirectResponse
+    public function showLogin()
     {
+        // Jika sudah login, langsung alihkan sesuai role pengguna
         if (Auth::check()) {
-            return redirect()->intended('/admin');
+            return Auth::user()->role === 'admin'
+                ? redirect()->route('admin.packages.index')
+                : redirect()->route('customer.catalog');
         }
-
         return view('auth.login');
     }
 
     /**
-     * Handle an incoming admin authentication request.
+     * Proses autentikasi login pengguna.
      */
-    public function login(Request $request): RedirectResponse
+    public function login(Request $request)
     {
         $credentials = $request->validate([
-            'username' => ['required', 'string'],
-            'password' => ['required', 'string'],
-        ], [
-            'username.required' => 'Username wajib diisi.',
-            'password.required' => 'Password wajib diisi.',
+            'email'    => 'required|email',
+            'password' => 'required',
         ]);
 
-        $remember = $request->boolean('remember');
-
-        if (Auth::attempt(['username' => $credentials['username'], 'password' => $credentials['password']], $remember)) {
+        if (Auth::attempt($credentials)) {
             $request->session()->regenerate();
 
-            return redirect()->intended('/admin');
+            // Pengalihan berdasarkan role pengguna
+            if (Auth::user()->role === 'admin') {
+                return redirect()->route('admin.packages.index')
+                    ->with('success', 'Selamat datang Admin!');
+            }
+
+            return redirect()->route('customer.catalog')
+                ->with('success', 'Selamat datang di Sistem Laundry!');
         }
 
-        return back()
-            ->withInput($request->only('username'))
-            ->withErrors([
-                'username' => 'Username atau password salah.',
-            ]);
+        return back()->withErrors([
+            'email' => 'Email atau password yang Anda masukkan salah!',
+        ])->onlyInput('email');
     }
 
     /**
-     * Destroy an authenticated admin session (Logout).
+     * Tampilkan formulir registrasi pelanggan baru.
      */
-    public function logout(Request $request): RedirectResponse
+    public function showRegister()
+    {
+        if (Auth::check()) {
+            return Auth::user()->role === 'admin'
+                ? redirect()->route('admin.packages.index')
+                : redirect()->route('customer.catalog');
+        }
+        return view('auth.register');
+    }
+
+    /**
+     * Proses pendaftaran akun pelanggan baru.
+     */
+    public function register(Request $request)
+    {
+        if (Auth::check()) {
+            return Auth::user()->role === 'admin'
+                ? redirect()->route('admin.packages.index')
+                : redirect()->route('customer.catalog');
+        }
+
+        $request->validate([
+            'name'     => 'required|string|max:255',
+            'email'    => 'required|email|unique:users,email',
+            'password' => 'required|min:6|confirmed',
+        ]);
+
+        $user = User::create([
+            'name'     => $request->name,
+            'email'    => $request->email,
+            'password' => Hash::make($request->password),
+            'role'     => 'customer', // Pendaftar umum otomatis sebagai customer
+        ]);
+
+        Auth::login($user);
+
+        return redirect()->route('customer.catalog')
+            ->with('success', 'Pendaftaran akun berhasil! Selamat datang di Sistem Laundry.');
+    }
+
+    /**
+     * Proses logout pengguna.
+     */
+    public function logout(Request $request)
     {
         Auth::logout();
-
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return redirect('/login')->with('success', 'Anda telah berhasil logout.');
+        return redirect()->route('login')->with('success', 'Anda telah berhasil logout.');
     }
 }

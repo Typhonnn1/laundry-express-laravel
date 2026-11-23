@@ -11,12 +11,13 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('orders', function (Blueprint $table) {
+        Schema::create('users', function (Blueprint $table) {
             $table->id();
-            $table->string('customer_name', 100);
-            $table->string('whatsapp_number', 20);
-            $table->integer('total_price')->default(0);
-            $table->enum('status', ['Antrean', 'Dicuci', 'Selesai'])->default('Antrean');
+            $table->string('name');
+            $table->string('email')->unique();
+            $table->string('password');
+            $table->enum('role', ['admin', 'customer'])->default('customer'); // [TAMBAHKAN] Kolom peran pengguna
+            $table->rememberToken();
             $table->timestamps();
         });
     }
@@ -26,6 +27,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('orders');
+        Schema::dropIfExists('users');
     }
 };
